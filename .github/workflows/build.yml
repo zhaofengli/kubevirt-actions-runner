@@ -1,0 +1,89 @@
+name: Build
+on:
+  pull_request:
+  push:
+jobs:
+  # Adapted from https://github.com/zhaofengli/attic/commits/main/.github/workflows/build.yml
+  runner:
+    name: Runner
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+      TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v3.5.3
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v4
+
+      - name: Setup automatic caching
+        uses: DeterminateSystems/magic-nix-cache-action@v2
+
+      - name: Log into GHCR
+        uses: docker/login-action@v2.2.0
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        run: |
+          ./cook-manifest.sh $IMAGE:$TAG
+
+      - name: Tag image
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          docker buildx imagetools create -t $IMAGE:latest $IMAGE:$TAG
+
+  sample-vm-container-disk:
+    name: Sample VM Container Disk
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/sample-vm-container-disk
+      TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v3.5.3
+
+      # HACK: Fake kvm feature for disk image build
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v4
+        with:
+          extra-conf: |
+            system-features = nixos-test benchmark big-parallel kvm
+
+      - name: Setup automatic caching
+        uses: DeterminateSystems/magic-nix-cache-action@v2
+
+      - name: Log into GHCR
+        uses: docker/login-action@v2.2.0
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        run: |
+          nix build .#nixosConfigurations.sample-vm.config.formats.qcow -L -o result
+          cp -L result nixos.qcow2
+
+          cat >Dockerfile << EOF
+          FROM scratch
+          ADD --chown=107:107 nixos.qcow2 /disk/
+          EOF
+
+          docker build -t $IMAGE:$TAG -f Dockerfile .
+          docker push $IMAGE:$TAG
+
+      - name: Tag image
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          docker tag $IMAGE:$TAG $IMAGE:latest
+          docker push $IMAGE:latest

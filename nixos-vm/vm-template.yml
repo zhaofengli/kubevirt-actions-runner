@@ -1,0 +1,39 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: vm-template
+  namespace: vm-runner-test
+spec:
+  runStrategy: Manual
+  template:
+    metadata:
+      name: runner
+    spec:
+      architecture: amd64
+      terminationGracePeriodSeconds: 30
+      domain:
+        cpu:
+          cores: 1
+        resources:
+          requests:
+            memory: 1Gi
+        devices:
+          filesystems:
+            - name: runner-info
+              virtiofs: {}
+          disks:
+            - name: disk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              model: virtio
+              masquerade: {}
+      volumes:
+        - name: disk
+          containerDisk:
+            image: ghcr.io/zhaofengli/sample-vm-container-disk:latest
+            imagePullPolicy: Always
+      networks:
+        - name: default
+          pod: {}
