@@ -11,10 +11,7 @@
     };
     crane = {
       url = "github:ipetkov/crane";
-      inputs.flake-compat.follows = "flake-compat";
-      inputs.flake-utils.follows = "flake-utils";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.rust-overlay.follows = "rust-overlay";
     };
     nixos-generators = {
       url = "github:nix-community/nixos-generators";
@@ -23,7 +20,6 @@
     nix-ld-rs = {
       url = "github:nix-community/nix-ld-rs";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.rust-overlay.follows = "rust-overlay";
       inputs.flake-compat.follows = "flake-compat";
       inputs.flake-utils.follows = "flake-utils";
     };
@@ -38,7 +34,7 @@
     supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
 
     # Rust nightly version.
-    nightlyVersion = "2023-07-20";
+    nightlyVersion = "2023-11-10";
 
     buildSampleVm = system: nixpkgs.lib.nixosSystem {
       inherit system;
