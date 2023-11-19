@@ -92,6 +92,10 @@ in {
 
           . ${load-runner-env}
 
+          if [[ -n "$info_jitconfig" ]]; then
+            exit 0
+          fi
+
           args=(
             --unattended
             --disableupdate
@@ -109,7 +113,17 @@ in {
           ${cfg.package}/bin/Runner.Listener configure "''${args[@]}"
         '';
 
-        ExecStart = "${cfg.package}/bin/Runner.Listener run --startuptype service";
+        ExecStart = pkgs.writeShellScript "start-runner" ''
+          set -euo pipefail
+
+          . ${load-runner-env}
+
+          if [[ -n "$info_jitconfig" ]]; then
+            export ACTIONS_RUNNER_INPUT_JITCONFIG="$info_jitconfig"
+          fi
+
+          exec ${cfg.package}/bin/Runner.Listener run --startuptype service
+        '';
 
         ExecStop = pkgs.writeShellScript "stop-runner" ''
           set -euo pipefail
@@ -117,6 +131,10 @@ in {
           cd "$STATE_DIRECTORY"
 
           . ${load-runner-env}
+
+          if [[ -n "$info_jitconfig" ]]; then
+            exit 0
+          fi
 
           ${cfg.package}/bin/Runner.Listener remove \
             --token "$info_token"
