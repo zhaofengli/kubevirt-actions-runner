@@ -111,30 +111,34 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
 ```
 
-### 3. Create runner deployment
+### 3. Create runner scale set
 
-Create a `RunnerDeployment` as follows:
+You can configure the runner scale set using Helm.
+Use the following `values.yaml`:
 
 ```yaml
-apiVersion: actions.summerwind.dev/v1alpha1
-kind: RunnerDeployment
-metadata:
-  name: vm-runner
-  namespace: vm-runner-test
-spec:
-  replicas: 2
-  template:
-    spec:
-      serviceAccountName: kubevirt-actions-runner
-      image: ghcr.io/zhaofengli/kubevirt-actions-runner:latest
-      repository: org/repo
+githubConfigUrl: https://github.com/<your_enterprise/org/repo>
+githubConfigSecret: ...
+template:
+  spec:
+    serviceAccountName: kubevirt-actions-runner
+    containers:
+      - name: runner
+        image: ghcr.io/zhaofengli/kubevirt-actions-runner:latest
+        command: []
+        env:
+          - name: KUBEVIRT_VM_TEMPLATE
+            value: vm-template
+```
 
-      # To prevent ARC from starting a separate container
-      dockerdWithinRunnerContainer: true
-
-      env:
-        - name: KUBEVIRT_VM_TEMPLATE
-          value: vm-template # name of the VirtualMachine
+```bash
+INSTALLATION_NAME="arc-runner-set"
+NAMESPACE="vm-runner-test"
+helm install "${INSTALLATION_NAME}" \
+    --namespace "${NAMESPACE}" \
+    --create-namespace \
+    --values ./values.yaml \
+    oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
 ```
 
 The lifecycle of the spawned VMI is bound to the runner pod.

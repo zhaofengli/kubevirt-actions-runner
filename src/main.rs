@@ -39,7 +39,31 @@ type VirtualMachineInstance = Object<VirtualMachineInstanceSpec, VirtualMachineI
 ///
 /// Alternatively, you can also mount it as a `disk`.
 #[derive(Debug, Clone, Serialize)]
-struct RunnerInfo {
+#[serde(untagged)]
+enum RunnerInfo {
+    Jit(JitRunnerInfo),
+    Legacy(LegacyRunnerInfo),
+}
+
+/// JIT runner info.
+///
+/// This is the new-style configuration passed by ARC. You simply
+/// need to start the runner with the `ACTIONS_RUNNER_INPUT_JITCONFIG`
+/// environment variable.
+#[derive(Debug, Clone, Serialize)]
+struct JitRunnerInfo {
+    /// A base64-encoded structure recognized by the runner.
+    ///
+    /// Set `ACTIONS_RUNNER_INPUT_JITCONFIG` to this value.
+    jitconfig: String,
+}
+
+/// Legacy runner info.
+///
+/// You need to configure the runner manually using these
+/// configurations.
+#[derive(Debug, Clone, Serialize)]
+struct LegacyRunnerInfo {
     /// The name of the runner.
     name: String,
 
@@ -126,12 +150,18 @@ struct Opts {
     namespace: Option<String>,
 
     /// The name of the runner.
-    #[clap(long, env = "RUNNER_NAME")]
+    #[clap(long, default_value = "runner", env = "RUNNER_NAME")]
     name: String,
+
+    /// The opaque JIT runner config.
+    ///
+    /// If this is specified, other GitHub API configs except `name` are ignored.
+    #[clap(long, env = "ACTIONS_RUNNER_INPUT_JITCONFIG")]
+    jitconfig: Option<String>,
 
     /// The runner registration token.
     #[clap(long, env = "RUNNER_TOKEN")]
-    token: String,
+    token: Option<String>,
 
     /// The URL of an organization or repo to register the runner in.
     ///
@@ -185,32 +215,48 @@ async fn main() {
 }
 
 async fn run(opts: Opts) -> AnyResult<()> {
-    let runner_url = opts.url.ok_or(()).or_else(|_| {
-        let base = env::var("GITHUB_URL").unwrap_or_else(|_| "https://github.com/".to_string());
-        let repo = env::var("RUNNER_REPO")
-            .ok()
-            .and_then(|v| if v.is_empty() { None } else { Some(v) });
-        let org = env::var("RUNNER_ORG")
-            .ok()
-            .and_then(|v| if v.is_empty() { None } else { Some(v) });
+    let vmi_name = opts.name;
+    let runner_info = if let Some(jitconfig) = &opts.jitconfig {
+        RunnerInfo::Jit(JitRunnerInfo {
+            jitconfig: jitconfig.clone(),
+        })
+    } else {
+        let runner_url = opts.url.ok_or(()).or_else(|_| {
+            let base = env::var("GITHUB_URL").unwrap_or_else(|_| "https://github.com/".to_string());
+            let repo = env::var("RUNNER_REPO")
+                .ok()
+                .and_then(|v| if v.is_empty() { None } else { Some(v) });
+            let org = env::var("RUNNER_ORG")
+                .ok()
+                .and_then(|v| if v.is_empty() { None } else { Some(v) });
 
-        let path = match (org, repo) {
-            (Some(_), Some(_)) => {
-                return Err(anyhow!(
-                    "RUNNER_REPO and RUNNER_ORG cannot both be non-empty"
-                ));
-            }
-            (None, None) => {
-                return Err(anyhow!("RUNNER_REPO or RUNNER_ORG must be set"));
-            }
-            (Some(org), None) => org,
-            (None, Some(repo)) => repo,
-        };
+            let path = match (org, repo) {
+                (Some(_), Some(_)) => {
+                    return Err(anyhow!(
+                        "RUNNER_REPO and RUNNER_ORG cannot both be non-empty"
+                    ));
+                }
+                (None, None) => {
+                    return Err(anyhow!("RUNNER_REPO or RUNNER_ORG must be set"));
+                }
+                (Some(org), None) => org,
+                (None, Some(repo)) => repo,
+            };
 
-        Ok(format!("{}{}", base, path))
-    })?;
+            Ok(format!("{}{}", base, path))
+        })?;
 
-    tracing::info!("Runner URL: {}", runner_url);
+        tracing::info!("Runner URL: {}", runner_url);
+
+        RunnerInfo::Legacy(LegacyRunnerInfo {
+            name: vmi_name.clone(),
+            token: opts.token.expect("A token is required"),
+            url: runner_url,
+            ephemeral: opts.ephemeral,
+            groups: opts.groups,
+            labels: opts.labels,
+        })
+    };
 
     let client = Client::try_default().await?;
     let namespace = opts
@@ -233,7 +279,6 @@ async fn run(opts: Opts) -> AnyResult<()> {
     let vms: Api<VirtualMachine> = Api::namespaced_with(client.clone(), namespace, &vm_resource);
     let vmis: Api<VirtualMachineInstance> =
         Api::namespaced_with(client.clone(), namespace, &vmi_resource);
-    let vmi_name = opts.name;
 
     if vmis.get_opt(&vmi_name).await?.is_some() {
         tracing::info!("The VMI already exists (were we killed?) - Deleting");
@@ -245,20 +290,12 @@ async fn run(opts: Opts) -> AnyResult<()> {
     let template = vms.get(&opts.vm_template).await?;
 
     let mut vmi = VirtualMachineInstance::new("vmi", &vmi_resource, template.spec.template.spec);
-    let runner_info = serde_json::to_string(&RunnerInfo {
-        name: vmi_name.clone(),
-        token: opts.token,
-        url: runner_url,
-        ephemeral: opts.ephemeral,
-        groups: opts.groups,
-        labels: opts.labels,
-    })?;
     vmi.metadata = template.spec.template.metadata;
     vmi.metadata.name = Some(vmi_name.clone());
     vmi.metadata
         .annotations
         .get_or_insert_with(Default::default)
-        .insert(RUNNER_INFO_ANNOTATION.to_string(), runner_info);
+        .insert(RUNNER_INFO_ANNOTATION.to_string(), serde_json::to_string(&runner_info)?);
 
     let mut data = BTreeMap::new();
     data.insert("downwardAPI".to_string(), serde_json::json!({
